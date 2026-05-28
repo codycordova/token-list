@@ -12,7 +12,7 @@ const networkPassphrase = StellarSdk.Networks.PUBLIC;
 const assetSchema = {
   type: "object",
   properties: {
-    name: { type: "string", maxLength: 30, minLength: 5 },
+    name: { type: "string", maxLength: 30, minLength: 4 },
     contract: { type: "string", pattern: "^C[A-Z0-9]{55}$" },
     code: { type: "string", pattern: "^[A-Za-z0-9]{1,12}$" },
     issuer: { type: "string", pattern: "^G[A-Z0-9]{55}$" },
@@ -110,6 +110,7 @@ async function verifyNewAssets(directoryPath, assetListPath) {
 
   let assetChanges = [];
   let verifiedNewAssets = [];
+  let verificationErrors = [];
 
   for (const file of assetFiles) {
     const filePath = path.join(assetsDir, file);
@@ -117,10 +118,9 @@ async function verifyNewAssets(directoryPath, assetListPath) {
 
     // Skip validation for files that couldn't be read properly
     if (!assetData || !validate(assetData)) {
-      console.log("🚀 ~ verifyNewAssets ~ validate(assetData):", validate(assetData))
-      console.log("🚀 ~ verifyNewAssets ~ assetData:", assetData)
-      
-      throw new Error(`Asset validation failed for ${file}:`, validate.errors);
+      const errors = JSON.stringify(validate.errors, null, 2);
+      verificationErrors.push(`Asset validation failed for ${file}:\n${errors}`);
+      continue;
     }
 
     const existingAsset = existingAssetsMap[assetData.contract];
@@ -154,8 +154,7 @@ async function verifyNewAssets(directoryPath, assetListPath) {
             // Check icon validity
             await checkIconUrl(assetData.icon);
           } catch (error) {
-            console.error(`Verification failed for asset ${file}: ${error}`);
-            isValid = false;
+            verificationErrors.push(`Verification failed for asset ${file}: ${error.message}`);
           }
         }
         assetChanges.push({ ...assetData });
@@ -188,7 +187,7 @@ async function verifyNewAssets(directoryPath, assetListPath) {
           // Check icon validity
           await checkIconUrl(assetData.icon);
         } catch (error) {
-          console.error(`Verification failed for asset ${file}: ${error}`);
+          verificationErrors.push(`Verification failed for asset ${file}: ${error.message}`);
           isValid = false;
         }
       }
@@ -198,6 +197,10 @@ async function verifyNewAssets(directoryPath, assetListPath) {
       }
     }
   }
+
+  // Check if we're in a GitHub Actions PR context
+  const isPullRequest = process.env.GITHUB_EVENT_NAME === "pull_request";
+  const isGitHubActions = !!process.env.GITHUB_ACTIONS;
 
   if (verifiedNewAssets.length > 0) {
     console.log("Verified new assets:", verifiedNewAssets);
@@ -211,6 +214,29 @@ async function verifyNewAssets(directoryPath, assetListPath) {
   } else {
     console.log("No changes detected in existing assets.");
   }
+
+  // If there are any verification errors, log them and exit with failure
+  if (verificationErrors.length > 0) {
+    console.error("\n❌ Verification errors found:");
+    verificationErrors.forEach((error) => {
+      console.error(error);
+    });
+    process.exit(1);
+  }
+
+  // In PR context, fail if no new assets were added and no changes detected
+  if (isPullRequest && isGitHubActions && verifiedNewAssets.length === 0 && assetChanges.length === 0) {
+    console.error("\n❌ Pull request validation failed: No new tokens added and no changes detected.");
+    console.error("Please add at least one new token or modify an existing token in this pull request.");
+    process.exit(1);
+  }
 }
 
-verifyNewAssets("../assets", "./tokenList.json");
+verifyNewAssets("../assets", "./tokenList.json")
+  .then(() => {
+    console.log("✅ Verification completed successfully");
+  })
+  .catch((error) => {
+    console.error("❌ Verification failed:", error.message);
+    process.exit(1);
+  });
